@@ -134,6 +134,7 @@ impl SlashCommand {
                 | SlashCommand::Fast
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::Fork
         )
     }
 

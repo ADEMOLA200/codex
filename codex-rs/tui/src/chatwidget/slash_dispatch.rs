@@ -6,6 +6,10 @@
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
 use super::*;
+use crate::terminal_multiplexer::fork_command_usage;
+use crate::terminal_multiplexer::parse_fork_pane_placement;
+use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::terminal_info;
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -89,7 +93,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
             SlashCommand::Fork => {
-                self.app_event_tx.send(AppEvent::ForkCurrentSession);
+                self.dispatch_fork_command(terminal_info().multiplexer.as_ref());
             }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
@@ -364,6 +368,15 @@ impl ChatWidget {
         }
     }
 
+    pub(super) fn dispatch_fork_command(&mut self, multiplexer: Option<&Multiplexer>) {
+        if let Some(multiplexer) = multiplexer {
+            self.open_fork_popup(multiplexer);
+        } else {
+            self.app_event_tx
+                .send(AppEvent::ForkCurrentSession { placement: None });
+        }
+    }
+
     /// Run an inline slash command.
     ///
     /// Branches that prepare arguments should pass `record_history: false` to the composer because
@@ -473,6 +486,23 @@ impl ChatWidget {
                 } else {
                     self.queue_user_message(user_message);
                 }
+            }
+            SlashCommand::Fork => {
+                if trimmed.is_empty() {
+                    self.app_event_tx
+                        .send(AppEvent::ForkCurrentSession { placement: None });
+                    return;
+                }
+                let mut parts = trimmed.split_whitespace();
+                let placement = parts.next().and_then(parse_fork_pane_placement);
+                if placement.is_none() || parts.next().is_some() {
+                    self.add_error_message(fork_command_usage(
+                        terminal_info().multiplexer.as_ref(),
+                    ));
+                    return;
+                }
+                self.app_event_tx
+                    .send(AppEvent::ForkCurrentSession { placement });
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
