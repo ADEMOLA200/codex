@@ -4,12 +4,11 @@ use std::fs::FileType;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_protocol::permissions::FileSystemReadDenyMatcher;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use tokio::fs;
 
-use crate::filesystem_deny_read::ReadDenyMatcher;
-use crate::filesystem_deny_read::ensure_read_allowed;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -22,6 +21,8 @@ pub struct ListDirHandler;
 
 const MAX_ENTRY_LENGTH: usize = 500;
 const INDENTATION_SPACES: usize = 2;
+const DENY_READ_POLICY_MESSAGE: &str =
+    "access denied: reading this path is blocked by filesystem deny_read policy";
 
 fn default_offset() -> usize {
     1
@@ -98,10 +99,18 @@ impl ToolHandler for ListDirHandler {
                 "dir_path must be an absolute path".to_string(),
             ));
         }
-        ensure_read_allowed(&path, &turn.file_system_sandbox_policy, &turn.cwd)?;
         let read_deny_matcher = turn
             .file_system_sandbox_policy
             .read_deny_matcher_with_cwd(&turn.cwd);
+        if read_deny_matcher
+            .as_ref()
+            .is_some_and(|matcher| matcher.is_read_denied(&path))
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "{DENY_READ_POLICY_MESSAGE}: `{}`",
+                path.display()
+            )));
+        }
 
         let entries =
             list_dir_slice_with_policy(&path, offset, limit, depth, read_deny_matcher.as_ref())
@@ -128,7 +137,7 @@ async fn list_dir_slice_with_policy(
     offset: usize,
     limit: usize,
     depth: usize,
-    read_deny_matcher: Option<&ReadDenyMatcher>,
+    read_deny_matcher: Option<&FileSystemReadDenyMatcher>,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
     collect_entries(path, Path::new(""), depth, read_deny_matcher, &mut entries).await?;
@@ -167,7 +176,7 @@ async fn collect_entries(
     dir_path: &Path,
     relative_prefix: &Path,
     depth: usize,
-    read_deny_matcher: Option<&ReadDenyMatcher>,
+    read_deny_matcher: Option<&FileSystemReadDenyMatcher>,
     entries: &mut Vec<DirEntry>,
 ) -> Result<(), FunctionCallError> {
     let mut queue = VecDeque::new();

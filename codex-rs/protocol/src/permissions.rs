@@ -1392,6 +1392,68 @@ mod tests {
         std::os::unix::fs::symlink(original, link)
     }
 
+    fn is_read_denied(
+        path: &Path,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        cwd: &Path,
+    ) -> bool {
+        file_system_sandbox_policy
+            .read_deny_matcher_with_cwd(cwd)
+            .is_some_and(|matcher| matcher.is_read_denied(path))
+    }
+
+    fn deny_policy(path: &Path) -> FileSystemSandboxPolicy {
+        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(path).expect("absolute deny path"),
+            },
+            access: FileSystemAccessMode::None,
+        }])
+    }
+
+    fn root_deny_with_readable_carveout_policy(path: &Path) -> FileSystemSandboxPolicy {
+        FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::None,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: AbsolutePathBuf::try_from(path).expect("absolute readable path"),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+        ])
+    }
+
+    fn root_deny_with_readable_carveout_and_nested_deny_policy(
+        readable_path: &Path,
+        denied_path: &Path,
+    ) -> FileSystemSandboxPolicy {
+        FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::None,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: AbsolutePathBuf::try_from(readable_path).expect("absolute readable path"),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: AbsolutePathBuf::try_from(denied_path).expect("absolute denied path"),
+                },
+                access: FileSystemAccessMode::None,
+            },
+        ])
+    }
+
     #[test]
     fn unknown_special_paths_are_ignored_by_legacy_bridge() -> std::io::Result<()> {
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
@@ -1559,6 +1621,83 @@ mod tests {
             !file_system_policy
                 .can_write_path_with_cwd(Path::new(".codex/config.toml"), relative_cwd,)
         );
+    }
+
+    #[test]
+    fn read_deny_matcher_blocks_exact_paths_and_descendants() {
+        let temp = TempDir::new().expect("temp dir");
+        let denied_dir = temp.path().join("denied");
+        let nested = denied_dir.join("nested.txt");
+        std::fs::create_dir_all(&denied_dir).expect("create denied dir");
+        std::fs::write(&nested, "secret").expect("write secret");
+
+        let policy = deny_policy(&denied_dir);
+        assert!(is_read_denied(&denied_dir, &policy, temp.path()));
+        assert!(is_read_denied(&nested, &policy, temp.path()));
+        assert!(!is_read_denied(
+            &temp.path().join("other.txt"),
+            &policy,
+            temp.path()
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_deny_matcher_matches_denied_symlink_alias_canonical_target() {
+        let temp = TempDir::new().expect("temp dir");
+        let real_dir = temp.path().join("real");
+        let alias_dir = temp.path().join("alias");
+        std::fs::create_dir_all(&real_dir).expect("create real dir");
+        symlink_dir(&real_dir, &alias_dir).expect("symlink alias");
+
+        let secret = real_dir.join("secret.txt");
+        std::fs::write(&secret, "secret").expect("write secret");
+        let alias_secret = alias_dir.join("secret.txt");
+
+        let policy = deny_policy(&real_dir);
+        assert!(is_read_denied(&alias_secret, &policy, temp.path()));
+    }
+
+    #[test]
+    fn read_deny_matcher_root_deny_blocks_paths_outside_readable_carveout() {
+        let temp = TempDir::new().expect("temp dir");
+        let readable_dir = temp.path().join("readable");
+        let blocked_dir = temp.path().join("blocked");
+        std::fs::create_dir_all(&readable_dir).expect("create readable dir");
+        std::fs::create_dir_all(&blocked_dir).expect("create blocked dir");
+
+        let policy = root_deny_with_readable_carveout_policy(&readable_dir);
+        assert!(is_read_denied(
+            &blocked_dir.join("secret.txt"),
+            &policy,
+            temp.path()
+        ));
+        assert!(!is_read_denied(
+            &readable_dir.join("visible.txt"),
+            &policy,
+            temp.path()
+        ));
+    }
+
+    #[test]
+    fn read_deny_matcher_explicit_deny_inside_root_deny_carveout_still_wins() {
+        let temp = TempDir::new().expect("temp dir");
+        let readable_dir = temp.path().join("readable");
+        let denied_dir = readable_dir.join("private");
+        std::fs::create_dir_all(&denied_dir).expect("create denied dir");
+
+        let policy =
+            root_deny_with_readable_carveout_and_nested_deny_policy(&readable_dir, &denied_dir);
+        assert!(!is_read_denied(
+            &readable_dir.join("visible.txt"),
+            &policy,
+            temp.path()
+        ));
+        assert!(is_read_denied(
+            &denied_dir.join("secret.txt"),
+            &policy,
+            temp.path()
+        ));
     }
 
     #[cfg(unix)]

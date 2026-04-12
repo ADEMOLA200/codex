@@ -34,7 +34,6 @@ pub mod exec_env;
 mod exec_policy;
 pub mod external_agent_config;
 pub mod file_watcher;
-mod filesystem_deny_read;
 mod flags;
 #[cfg(test)]
 mod git_info_tests;
