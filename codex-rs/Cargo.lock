@@ -2404,6 +2404,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-model-provider"
+version = "0.0.0"
+dependencies = [
+ "codex-model-provider-info",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+]
+
+[[package]]
 name = "codex-model-provider-info"
 version = "0.0.0"
 dependencies = [
