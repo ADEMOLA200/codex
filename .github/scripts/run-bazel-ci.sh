@@ -76,24 +76,31 @@ print_bazel_test_log_tails() {
 
   testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
 
-  local failed_targets=()
-  while IFS= read -r target; do
-    failed_targets+=("$target")
+  local failed_test_logs=()
+  while IFS= read -r failed_test_log; do
+    failed_test_logs+=("$failed_test_log")
   done < <(
     grep -E '^FAIL: //' "$console_log" \
-      | sed -E 's#^FAIL: (//[^ ]+).*#\1#' \
+      | sed -E \
+        -e 's#^FAIL: (//[^ ]+).*\(see ([^)]*/test\.log)\).*#\1	\2#' \
+        -e 't' \
+        -e 's#^FAIL: (//[^ ]+).*#\1	#' \
       | sort -u
   )
 
-  if [[ ${#failed_targets[@]} -eq 0 ]]; then
+  if [[ ${#failed_test_logs[@]} -eq 0 ]]; then
     echo "No failed Bazel test targets were found in console output."
     return
   fi
 
-  for target in "${failed_targets[@]}"; do
+  for failed_test_log in "${failed_test_logs[@]}"; do
+    local target="${failed_test_log%%$'\t'*}"
+    local test_log="${failed_test_log#*$'\t'}"
     local rel_path="${target#//}"
     rel_path="${rel_path/://}"
-    local test_log="${testlogs_dir}/${rel_path}/test.log"
+    if [[ -z "$test_log" || "$test_log" == "$target" ]]; then
+      test_log="${testlogs_dir}/${rel_path}/test.log"
+    fi
 
     echo "::group::Bazel test log tail for ${target}"
     if [[ -f "$test_log" ]]; then
