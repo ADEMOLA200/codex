@@ -37,7 +37,7 @@ use codex_utils_output_truncation::truncate_text;
 use futures::prelude::*;
 use tracing::error;
 
-use codex_provider_auth::ModelProvider;
+use codex_model_provider::ModelProvider;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
