@@ -5251,6 +5251,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         rules: None,
         enforce_residency: None,
         network: None,
+        permissions: None,
         guardian_policy_config: None,
     };
     let requirement_source = crate::config_loader::RequirementSource::Unknown;
@@ -5884,6 +5885,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         rules: None,
         enforce_residency: None,
         network: None,
+        permissions: None,
         guardian_policy_config: None,
     };
 
