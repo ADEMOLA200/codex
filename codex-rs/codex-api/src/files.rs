@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::AuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
 use reqwest::StatusCode;
+use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_LENGTH;
 use serde::Deserialize;
 use tokio::fs::File;
@@ -260,8 +261,8 @@ fn authorized_request(
     let mut request = client
         .request(method, url)
         .timeout(OPENAI_FILE_REQUEST_TIMEOUT);
-    if let Some(token) = auth.bearer_token() {
-        request = request.bearer_auth(token);
+    if let Some(authorization) = auth.authorization_header_value() {
+        request = request.header(AUTHORIZATION, authorization);
     }
     if let Some(account_id) = auth.account_id() {
         request = request.header("chatgpt-account-id", account_id);
@@ -307,6 +308,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/backend-api/files"))
+            .and(header("authorization", "Bearer token"))
             .and(header("chatgpt-account-id", "account_id"))
             .and(body_json(serde_json::json!({
                 "file_name": "hello.txt",
@@ -366,5 +368,57 @@ mod tests {
         assert_eq!(uploaded.file_name, "hello.txt");
         assert_eq!(uploaded.mime_type, Some("text/plain".to_string()));
         assert_eq!(finalize_attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn upload_local_file_uses_authorization_header_value() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files"))
+            .and(header("authorization", "AgentAssertion test-assertion"))
+            .and(body_json(serde_json::json!({
+                "file_name": "hello.txt",
+                "file_size": 5,
+                "use_case": "codex",
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"file_id": "file_123", "upload_url": format!("{}/upload/file_123", server.uri())})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/file_123"))
+            .and(header("content-length", "5"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files/file_123/uploaded"))
+            .and(header("authorization", "AgentAssertion test-assertion"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": format!("{}/download/file_123", server.uri()),
+                "file_name": "hello.txt",
+                "mime_type": "text/plain",
+                "file_size_bytes": 5
+            })))
+            .mount(&server)
+            .await;
+
+        let base_url = base_url_for(&server);
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("hello.txt");
+        tokio::fs::write(&path, b"hello").await.expect("write file");
+        let auth = CoreAuthProvider::for_test_authorization_header(
+            Some("AgentAssertion test-assertion"),
+            /*account_id*/ None,
+        );
+
+        let uploaded = upload_local_file(&base_url, &auth, &path)
+            .await
+            .expect("upload succeeds");
+
+        assert_eq!(uploaded.file_id, "file_123");
     }
 }
